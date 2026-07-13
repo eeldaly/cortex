@@ -14,10 +14,12 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/gogo/status"
@@ -2725,6 +2727,42 @@ func (i *Ingester) checkRegexMatcherLimits(ctx context.Context, userID string, d
 	return nil
 }
 
+// metricNameShardSelectorLabel is the synthetic label the distributed-execution
+// optimizer injects into per-shard subqueries (value format "<count>_<idx>").
+// The ingester consumes it to filter a subquery down to only the series whose
+// metric name belongs to the requested shard, then strips it so it never
+// reaches the underlying querier (no real series carries this label).
+const metricNameShardSelectorLabel = "__cortex_ingester_shard__"
+
+// extractMetricNameShardSelector removes the query-directed shard selector
+// matcher (if present) from the matcher set and returns the parsed shard
+// count/index.
+func extractMetricNameShardSelector(matchers []*labels.Matcher) (remaining []*labels.Matcher, count uint64, idx uint64, ok bool) {
+	remaining = make([]*labels.Matcher, 0, len(matchers))
+	for _, m := range matchers {
+		if m.Name == metricNameShardSelectorLabel {
+			if parts := strings.Split(m.Value, "_"); len(parts) == 2 {
+				c, err1 := strconv.ParseUint(parts[0], 10, 64)
+				i, err2 := strconv.ParseUint(parts[1], 10, 64)
+				if err1 == nil && err2 == nil {
+					count, idx, ok = c, i, true
+				}
+			}
+			continue
+		}
+		remaining = append(remaining, m)
+	}
+	return remaining, count, idx, ok
+}
+
+// metricNameShardHash maps a metric name to a shard by hashing it, matching the
+// hashing used by the shard-by-metric-name compaction/storage layer.
+func metricNameShardHash(s string) uint64 {
+	h := xxhash.New()
+	_, _ = h.Write([]byte(s))
+	return h.Sum64()
+}
+
 // queryStreamChunks streams metrics from a TSDB. This implements the client.IngesterServer interface
 func (i *Ingester) queryStreamChunks(ctx context.Context, userID string, db *userTSDB, from, through int64, matchers []*labels.Matcher, sm *storepb.ShardMatcher, stream client.Ingester_QueryStreamServer) (numSeries, numSamples, totalBatchSizeBytes, numChunks int, _ error) {
 	q, err := db.ChunkQuerier(from, through)
@@ -2749,6 +2787,12 @@ func (i *Ingester) queryStreamChunks(ctx context.Context, userID string, db *use
 		End:             through,
 		DisableTrimming: i.cfg.DisableChunkTrimming,
 	}
+	// Extract the query-directed shard selector (if any) injected by the
+	// distributed-execution optimizer. It is stripped from the matcher set so
+	// it never reaches the underlying querier (no real series carries it), and
+	// used below to filter series to only those belonging to the requested shard.
+	matchers, shardCount, shardIdx, shardByMetricName := extractMetricNameShardSelector(matchers)
+
 	var lazyMatchers []*labels.Matcher
 	if i.cfg.EnableMatcherOptimization {
 		matchers, lazyMatchers = optimizeMatchers(matchers)
@@ -2786,6 +2830,14 @@ func (i *Ingester) queryStreamChunks(ctx context.Context, userID string, db *use
 
 		if sm.IsSharded() && !sm.MatchesLabels(lbls) {
 			continue
+		}
+
+		// Query-directed sharding by metric name: keep only series whose metric
+		// name hashes to the requested shard.
+		if shardByMetricName && shardCount > 0 {
+			if metricNameShardHash(lbls.Get(labels.MetricName))%shardCount != shardIdx {
+				continue
+			}
 		}
 
 		// Collect hash for batched tracking (only if sampling decision allows)
