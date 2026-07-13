@@ -26,7 +26,6 @@ import (
 	"github.com/thanos-io/thanos/pkg/querysharding"
 
 	"github.com/cortexproject/cortex/pkg/chunk/cache"
-	"github.com/cortexproject/cortex/pkg/distributed_execution"
 	"github.com/cortexproject/cortex/pkg/querier"
 	"github.com/cortexproject/cortex/pkg/querier/tripperware"
 	"github.com/cortexproject/cortex/pkg/util/flagext"
@@ -147,8 +146,7 @@ func Middlewares(
 	if distributedExecEnabled {
 		queryRangeMiddleware = append(queryRangeMiddleware,
 			tripperware.InstrumentMiddleware("range_logical_plan_gen", metrics),
-			tripperware.DistributedQueryMiddleware(defaultEvaluationInterval, lookbackDelta,
-				append(localOptimizers, &distributed_execution.DistributedOptimizer{})))
+			tripperware.DistributedQueryMiddleware(defaultEvaluationInterval, lookbackDelta, localOptimizers, limits))
 	}
 
 	return queryRangeMiddleware, c, nil

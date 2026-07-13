@@ -7,7 +7,6 @@ import (
 	"github.com/thanos-io/promql-engine/logicalplan"
 	"github.com/thanos-io/thanos/pkg/querysharding"
 
-	"github.com/cortexproject/cortex/pkg/distributed_execution"
 	"github.com/cortexproject/cortex/pkg/querier/tripperware"
 )
 
@@ -28,8 +27,7 @@ func Middlewares(
 
 	if distributedExecEnabled {
 		m = append(m,
-			tripperware.DistributedQueryMiddleware(defaultEvaluationInterval, lookbackDelta,
-				append(localOptimizers, &distributed_execution.DistributedOptimizer{})))
+			tripperware.DistributedQueryMiddleware(defaultEvaluationInterval, lookbackDelta, localOptimizers, limits))
 	}
 
 	return m, nil
