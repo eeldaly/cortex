@@ -37,33 +37,30 @@ func (d *DistributedOptimizer) Optimize(root logicalplan.Node, opts *query.Optio
 		return root, *warns
 	}
 
-	shardCount := d.ShardCount
-	if shardCount <= 0 {
-		// No (or invalid) shard size configured: nothing to shard, leave the
-		// plan unchanged so behaviour matches a non-distributed query.
-		return root, *warns
-	}
-
-	// Strategy 1: shard aggregations (sum/count) across shards.
+	// Strategy 1 (experimental): shard aggregations (sum/count) across shards.
+	// Only runs when a positive shard count is configured; otherwise it is left
+	// to the pre-existing binary-splitting strategy below.
 	sharded := false
-	logicalplan.TraverseBottomUp(nil, &root, func(parent, current *logicalplan.Node) bool {
-		if aggr, ok := (*current).(*logicalplan.Aggregation); ok {
-			switch aggr.Op {
-			case parser.SUM, parser.COUNT:
-				subqueries := newRemoteAggregation(aggr, shardCount)
-				*current = &logicalplan.Aggregation{
-					Op:       parser.SUM,
-					Expr:     &ShardedRemoteExecutions{Expressions: subqueries},
-					Param:    aggr.Param,
-					Grouping: aggr.Grouping,
-					Without:  aggr.Without,
+	if shardCount := d.ShardCount; shardCount > 0 {
+		logicalplan.TraverseBottomUp(nil, &root, func(parent, current *logicalplan.Node) bool {
+			if aggr, ok := (*current).(*logicalplan.Aggregation); ok {
+				switch aggr.Op {
+				case parser.SUM, parser.COUNT:
+					subqueries := newRemoteAggregation(aggr, shardCount)
+					*current = &logicalplan.Aggregation{
+						Op:       parser.SUM,
+						Expr:     &ShardedRemoteExecutions{Expressions: subqueries},
+						Param:    aggr.Param,
+						Grouping: aggr.Grouping,
+						Without:  aggr.Without,
+					}
+					sharded = true
 				}
-				sharded = true
+				return true
 			}
-			return true
-		}
-		return false
-	})
+			return false
+		})
+	}
 
 	// Strategy 2 (pre-existing): offload binary-expression operands that
 	// contain an aggregation to Remote fragments. Skipped when the
