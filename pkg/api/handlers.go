@@ -28,10 +28,12 @@ import (
 	"github.com/weaveworks/common/middleware"
 
 	"github.com/cortexproject/cortex/pkg/api/queryapi"
+	"github.com/cortexproject/cortex/pkg/distributed_execution"
 	"github.com/cortexproject/cortex/pkg/engine"
 	"github.com/cortexproject/cortex/pkg/querier"
 	"github.com/cortexproject/cortex/pkg/querier/codec"
 	"github.com/cortexproject/cortex/pkg/querier/stats"
+	"github.com/cortexproject/cortex/pkg/ring/client"
 	"github.com/cortexproject/cortex/pkg/util"
 	util_log "github.com/cortexproject/cortex/pkg/util/log"
 	"github.com/cortexproject/cortex/pkg/util/request_tracker"
@@ -170,6 +172,9 @@ func NewQuerierHandler(
 	metadataQuerier querier.MetadataQuerier,
 	reg prometheus.Registerer,
 	logger log.Logger,
+	queryTracker *distributed_execution.QueryTracker,
+	distributedExecEnabled bool,
+	querierClientPool *client.Pool,
 ) http.Handler {
 	// Prometheus histograms for requests to the querier.
 	querierRequestDuration := promauto.With(reg).NewHistogramVec(prometheus.HistogramOpts{
@@ -302,7 +307,7 @@ func NewQuerierHandler(
 		TotalTimeout:      querierCfg.TimeoutClassificationDeadline,
 		EvalTimeThreshold: querierCfg.TimeoutClassificationEvalThreshold,
 		Enabled:           querierCfg.TimeoutClassificationEnabled,
-	})
+	}, queryTracker, distributedExecEnabled, querierClientPool)
 
 	requestTracker := request_tracker.NewRequestTracker(querierCfg.ActiveQueryTrackerDir, "apis.active", querierCfg.MaxConcurrent, util_log.GoKitLogToSlog(logger))
 	var apiHandler http.Handler

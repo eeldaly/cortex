@@ -28,6 +28,7 @@ import (
 	"github.com/thanos-io/promql-engine/query"
 	"github.com/weaveworks/common/user"
 
+	"github.com/cortexproject/cortex/pkg/distributed_execution"
 	engine2 "github.com/cortexproject/cortex/pkg/engine"
 	"github.com/cortexproject/cortex/pkg/querier"
 	"github.com/cortexproject/cortex/pkg/querier/series"
@@ -183,7 +184,7 @@ func Test_CustomAPI(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			c := NewQueryAPI(engine, mockQueryable, querier.StatsRenderer, log.NewNopLogger(), []v1.Codec{v1.JSONCodec{}}, regexp.MustCompile(".*"), stats.PhaseTrackerConfig{})
+			c := NewQueryAPI(engine, mockQueryable, querier.StatsRenderer, log.NewNopLogger(), []v1.Codec{v1.JSONCodec{}}, regexp.MustCompile(".*"), stats.PhaseTrackerConfig{}, nil, false, nil)
 
 			router := mux.NewRouter()
 			router.Path("/api/v1/query").Methods("POST").Handler(c.Wrap(c.InstantQueryHandler))
@@ -244,7 +245,7 @@ func Test_InvalidCodec(t *testing.T) {
 		},
 	}
 
-	queryAPI := NewQueryAPI(engine, mockQueryable, querier.StatsRenderer, log.NewNopLogger(), []v1.Codec{&mockCodec{}}, regexp.MustCompile(".*"), stats.PhaseTrackerConfig{})
+	queryAPI := NewQueryAPI(engine, mockQueryable, querier.StatsRenderer, log.NewNopLogger(), []v1.Codec{&mockCodec{}}, regexp.MustCompile(".*"), stats.PhaseTrackerConfig{}, nil, false, nil)
 	router := mux.NewRouter()
 	router.Path("/api/v1/query").Methods("POST").Handler(queryAPI.Wrap(queryAPI.InstantQueryHandler))
 
@@ -285,7 +286,7 @@ func Test_CustomAPI_StatsRenderer(t *testing.T) {
 		},
 	}
 
-	queryAPI := NewQueryAPI(engine, mockQueryable, querier.StatsRenderer, log.NewNopLogger(), []v1.Codec{v1.JSONCodec{}}, regexp.MustCompile(".*"), stats.PhaseTrackerConfig{})
+	queryAPI := NewQueryAPI(engine, mockQueryable, querier.StatsRenderer, log.NewNopLogger(), []v1.Codec{v1.JSONCodec{}}, regexp.MustCompile(".*"), stats.PhaseTrackerConfig{}, nil, false, nil)
 
 	router := mux.NewRouter()
 	router.Path("/api/v1/query_range").Methods("POST").Handler(queryAPI.Wrap(queryAPI.RangeQueryHandler))
@@ -360,10 +361,10 @@ func Test_Logicalplan_Requests(t *testing.T) {
 			end:          1536673680,
 			stepDuration: 5,
 			requestBody: func(t *testing.T) []byte {
-				return append(createTestLogicalPlan(t, 1536673665, 1536673680, 5), []byte("random data")...)
+				return []byte("random_data")
 			},
 			expectedCode: http.StatusInternalServerError,
-			expectedBody: `{"status":"error","errorType":"server_error","error":"invalid logical plan: invalid character 'r' after top-level value"}`,
+			expectedBody: `{"status":"error","errorType":"server_error","error":"invalid logical plan: invalid character 'r' looking for beginning of value"}`,
 		},
 		{
 			name:         "[Range Query] with empty body and non-empty query string", // fall back to promql query execution
@@ -408,10 +409,10 @@ func Test_Logicalplan_Requests(t *testing.T) {
 			end:          1536673670,
 			stepDuration: 0,
 			requestBody: func(t *testing.T) []byte {
-				return append(createTestLogicalPlan(t, 1536673670, 1536673670, 0), []byte("random data")...)
+				return []byte("random_data")
 			},
 			expectedCode: http.StatusInternalServerError,
-			expectedBody: `{"status":"error","errorType":"server_error","error":"invalid logical plan: invalid character 'r' after top-level value"}`,
+			expectedBody: `{"status":"error","errorType":"server_error","error":"invalid logical plan: invalid character 'r' looking for beginning of value"}`,
 		},
 		{
 			name:         "[Instant Query] with empty body and non-empty query string",
@@ -441,12 +442,16 @@ func Test_Logicalplan_Requests(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewQueryAPI(engine, mockQueryable, querier.StatsRenderer, log.NewNopLogger(), []v1.Codec{v1.JSONCodec{}}, regexp.MustCompile(".*"), stats.PhaseTrackerConfig{})
+			tracker := distributed_execution.NewQueryTracker()
+			c := NewQueryAPI(engine, mockQueryable, querier.StatsRenderer, log.NewNopLogger(), []v1.Codec{v1.JSONCodec{}}, regexp.MustCompile(".*"), stats.PhaseTrackerConfig{}, tracker, true, nil)
 			router := mux.NewRouter()
 			router.Path("/api/v1/query").Methods("POST").Handler(c.Wrap(c.InstantQueryHandler))
 			router.Path("/api/v1/query_range").Methods("POST").Handler(c.Wrap(c.RangeQueryHandler))
 
 			req := createTestRequest(tt.path, tt.requestBody(t))
+			newctx := distributed_execution.InjectFragmentMetaData(context.Background(), uint64(1), uint64(1), true, nil)
+			req = req.WithContext(newctx)
+
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, req)
 
