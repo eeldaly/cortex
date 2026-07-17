@@ -69,6 +69,7 @@ func TestRoundTrip(t *testing.T) {
 		5*time.Minute,
 		time.Minute,
 		false,
+		0,
 		logicalplan.DefaultOptimizers,
 		nil,
 	)
@@ -195,6 +196,7 @@ func TestRoundTripWithAndWithoutDistributedExec(t *testing.T) {
 				5*time.Minute,
 				time.Minute,
 				tc.distributedEnabled,
+				0,
 				logicalplan.DefaultOptimizers,
 				nil,
 			)

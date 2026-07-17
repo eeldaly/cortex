@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"runtime"
 	"runtime/debug"
+	"time"
 
 	"github.com/go-kit/log/level"
 	"github.com/opentracing-contrib/go-stdlib/nethttp"
@@ -35,6 +36,7 @@ import (
 	"github.com/cortexproject/cortex/pkg/compactor"
 	configAPI "github.com/cortexproject/cortex/pkg/configs/api"
 	"github.com/cortexproject/cortex/pkg/configs/db"
+	"github.com/cortexproject/cortex/pkg/distributed_execution"
 	"github.com/cortexproject/cortex/pkg/distributor"
 	"github.com/cortexproject/cortex/pkg/engine"
 	"github.com/cortexproject/cortex/pkg/flusher"
@@ -53,6 +55,7 @@ import (
 	querier_worker "github.com/cortexproject/cortex/pkg/querier/worker"
 	cortexquerysharding "github.com/cortexproject/cortex/pkg/querysharding"
 	"github.com/cortexproject/cortex/pkg/ring"
+	"github.com/cortexproject/cortex/pkg/ring/client"
 	"github.com/cortexproject/cortex/pkg/ring/kv/codec"
 	"github.com/cortexproject/cortex/pkg/ring/kv/memberlist"
 	"github.com/cortexproject/cortex/pkg/ruler"
@@ -394,6 +397,28 @@ func (t *Cortex) initTenantFederation() (serv services.Service, err error) {
 //	                                          │                  │
 //	                                          └──────────────────┘
 func (t *Cortex) initQuerier() (serv services.Service, err error) {
+	// Set up distributed execution components (query result tracker, querier-to-querier
+	// gRPC server, and client pool) only when the feature is enabled.
+	var queryTracker *distributed_execution.QueryTracker
+	var querierServer *distributed_execution.QuerierServer
+	var querierClientPool *client.Pool
+
+	if t.Cfg.Querier.DistributedExecEnabled {
+		queryTracker = distributed_execution.NewQueryTracker()
+		querierServer = distributed_execution.NewQuerierServer(queryTracker)
+		querierClientPool = distributed_execution.NewQuerierPool(t.Cfg.Worker.GRPCClientConfig, prometheus.DefaultRegisterer, util_log.Logger)
+
+		// Periodically evict expired fragment results from the tracker.
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				queryTracker.CleanExpired()
+			}
+		}()
+		t.API.RegisterQuerierServer(querierServer)
+	}
+
 	// Create a internal HTTP handler that is configured with the Prometheus API routes and points
 	// to a Prometheus API struct instantiated with the Cortex Queryable.
 	internalQuerierRouter := api.NewQuerierHandler(
@@ -405,6 +430,9 @@ func (t *Cortex) initQuerier() (serv services.Service, err error) {
 		t.MetadataQuerier,
 		prometheus.DefaultRegisterer,
 		util_log.Logger,
+		queryTracker,
+		t.Cfg.Querier.DistributedExecEnabled,
+		querierClientPool,
 	)
 
 	// If the querier is running standalone without the query-frontend or query-scheduler, we must register it's internal
@@ -584,6 +612,7 @@ func (t *Cortex) initQueryFrontendTripperware() (serv services.Service, err erro
 		t.Cfg.Querier.LookbackDelta,
 		t.Cfg.Querier.DefaultEvaluationInterval,
 		t.Cfg.Querier.DistributedExecEnabled,
+		t.Cfg.Querier.DistributedExecShardCount,
 		t.Cfg.Querier.ThanosEngine.LogicalOptimizers,
 		tenantResolverFn,
 	)
@@ -599,6 +628,7 @@ func (t *Cortex) initQueryFrontendTripperware() (serv services.Service, err erro
 		t.Cfg.Querier.LookbackDelta,
 		t.Cfg.Querier.DefaultEvaluationInterval,
 		t.Cfg.Querier.DistributedExecEnabled,
+		t.Cfg.Querier.DistributedExecShardCount,
 		t.Cfg.Querier.ThanosEngine.LogicalOptimizers)
 	if err != nil {
 		return nil, err
