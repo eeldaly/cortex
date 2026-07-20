@@ -17,9 +17,8 @@ func TestRemoteNode(t *testing.T) {
 
 	t.Run("Clone creates correct copy", func(t *testing.T) {
 		original := &Remote{
-			FragmentKey:  FragmentKey{queryID: 1, fragmentID: 2},
-			FragmentAddr: "[IP_ADDRESS]:9090",
-			Expr:         &logicalplan.NumberLiteral{Val: 42},
+			FragmentKey: FragmentKey{queryID: 1, fragmentID: 2},
+			Expr:        &logicalplan.NumberLiteral{Val: 42},
 		}
 
 		cloned := original.Clone()
@@ -28,7 +27,6 @@ func TestRemoteNode(t *testing.T) {
 		remote, ok := cloned.(*Remote)
 		require.True(t, ok)
 		require.Equal(t, original.FragmentKey, remote.FragmentKey)
-		require.Equal(t, original.FragmentAddr, remote.FragmentAddr)
 		require.Equal(t, original.Expr.String(), remote.Expr.String())
 	})
 

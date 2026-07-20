@@ -32,8 +32,7 @@ var _ model.VectorOperator = (*DistributedRemoteExecution)(nil)
 type Remote struct {
 	Expr logicalplan.Node `json:"-"`
 
-	FragmentKey  FragmentKey
-	FragmentAddr string
+	FragmentKey FragmentKey
 
 	clientPool *client.Pool
 }
@@ -46,7 +45,7 @@ func NewRemoteNode(Expr logicalplan.Node) logicalplan.Node {
 	}
 }
 func (r *Remote) Clone() logicalplan.Node {
-	return &Remote{Expr: r.Expr.Clone(), FragmentKey: r.FragmentKey, FragmentAddr: r.FragmentAddr, clientPool: r.clientPool}
+	return &Remote{Expr: r.Expr.Clone(), FragmentKey: r.FragmentKey, clientPool: r.clientPool}
 }
 func (r *Remote) Children() []*logicalplan.Node {
 	return []*logicalplan.Node{&r.Expr}
@@ -66,16 +65,14 @@ func (r *Remote) InsertClientPool(clientPool *client.Pool) {
 }
 
 type remote struct {
-	QueryID      uint64
-	FragmentID   uint64
-	FragmentAddr string
+	QueryID    uint64
+	FragmentID uint64
 }
 
 func (r *Remote) MarshalJSON() ([]byte, error) {
 	return json.Marshal(remote{
-		QueryID:      r.FragmentKey.queryID,
-		FragmentID:   r.FragmentKey.fragmentID,
-		FragmentAddr: r.FragmentAddr,
+		QueryID:    r.FragmentKey.queryID,
+		FragmentID: r.FragmentKey.fragmentID,
 	})
 }
 
@@ -86,7 +83,6 @@ func (r *Remote) UnmarshalJSON(data []byte) error {
 	}
 
 	r.FragmentKey = MakeFragmentKey(re.QueryID, re.FragmentID)
-	r.FragmentAddr = re.FragmentAddr
 	return nil
 }
 
